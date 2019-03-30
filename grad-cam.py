@@ -1,3 +1,4 @@
+#add batch
 import torch
 from torch.autograd import Variable
 from torch.autograd import Function
@@ -7,6 +8,10 @@ import cv2
 import sys
 import numpy as np
 import argparse
+
+
+import torch.nn as nn
+import torch.nn.functional as F
 
 class FeatureExtractor():
     """ Class for extracting activations and 
@@ -19,15 +24,17 @@ class FeatureExtractor():
     def save_gradient(self, grad):
     	self.gradients.append(grad)
 
-    def __call__(self, x):
-        outputs = []
+    def __call__(self, output):
+        features = []
         self.gradients = []
+        #print(self.model)
         for name, module in self.model._modules.items():
-            x = module(x)
+            output =  module(output)
             if name in self.target_layers:
-                x.register_hook(self.save_gradient)
-                outputs += [x]
-        return outputs, x
+                #print(name,(self.target_layers))
+                output.register_hook(self.save_gradient)
+                features += [output]
+        return features, output
 
 class ModelOutputs():
 	""" Class for making a forward pass, and getting:
@@ -43,7 +50,11 @@ class ModelOutputs():
 
 	def __call__(self, x):
 		target_activations, output  = self.feature_extractor(x)
-		output = output.view(output.size(0), -1)
+		
+		#output = self.model.features.denseblock4.denselayer2.conv2(output)
+		#output = self.model.features.norm5(output)
+		output = F.relu(output, inplace=True)
+		output = F.adaptive_avg_pool2d(output, (1, 1)).view(output.size(0), -1)
 		output = self.model.classifier(output)
 		return target_activations, output
 
@@ -67,57 +78,60 @@ def show_cam_on_image(img, mask):
 	heatmap = np.float32(heatmap) / 255
 	cam = heatmap + np.float32(img)
 	cam = cam / np.max(cam)
-	cv2.imwrite("cam.jpg", np.uint8(255 * cam))
-
+	out = np.uint8(255 * cam)
+	cv2.imwrite("cam.jpg", out)
+	return out
 class GradCam:
-	def __init__(self, model, target_layer_names, use_cuda):
+	def __init__(self, model, target_layer_names, cuda_id):
 		self.model = model
 		self.model.eval()
-		self.cuda = use_cuda
-		if self.cuda:
-			self.model = model.cuda()
-
+		self.device = torch.device(f'cuda:{cuda_id}' if cuda_id is not None and torch.cuda.is_available() else 'cpu')
+		self.model = model.to(self.device)
 		self.extractor = ModelOutputs(self.model, target_layer_names)
 
 	def forward(self, input):
 		return self.model(input) 
 
-	def __call__(self, input, index = None):
-		if self.cuda:
-			features, output = self.extractor(input.cuda())
-		else:
-			features, output = self.extractor(input)
+	def __call__(self, input, index = None,resize = None):
+		features, output = self.extractor(input.to(self.device))
 
 		if index == None:
 			index = np.argmax(output.cpu().data.numpy())
 
-		one_hot = np.zeros((1, output.size()[-1]), dtype = np.float32)
-		one_hot[0][index] = 1
+		one_hot = np.zeros((output.shape[0], output.size()[-1]), dtype = np.float32)
+		one_hot[:,index] = 1
 		one_hot = Variable(torch.from_numpy(one_hot), requires_grad = True)
-		if self.cuda:
-			one_hot = torch.sum(one_hot.cuda() * output)
-		else:
-			one_hot = torch.sum(one_hot * output)
+		one_hot = torch.sum(one_hot.to(self.device) * output)
+	
 
 		self.model.features.zero_grad()
 		self.model.classifier.zero_grad()
-		one_hot.backward(retain_variables=True)
+		one_hot.backward(retain_graph = True)
 
 		grads_val = self.extractor.get_gradients()[-1].cpu().data.numpy()
-
+	
 		target = features[-1]
-		target = target.cpu().data.numpy()[0, :]
+		
+		target = target.cpu().data.numpy()#[0, :]
+	
+		weights = np.mean(grads_val, axis = (2, 3),keepdims = True)#[0, :]
 
-		weights = np.mean(grads_val, axis = (2, 3))[0, :]
-		cam = np.zeros(target.shape[1 : ], dtype = np.float32)
+		
 
-		for i, w in enumerate(weights):
-			cam += w * target[i, :, :]
-
-		cam = np.maximum(cam, 0)
-		cam = cv2.resize(cam, (224, 224))
-		cam = cam - np.min(cam)
-		cam = cam / np.max(cam)
+		'''
+			grad (32, 128, 8, 8)
+			weight (32 128,)
+			target (32 128, 8, 8)
+			cam (32 8, 8)		
+		'''
+		
+		weights = torch.from_numpy(weights).to(self.device)
+		target = torch.from_numpy(target).to(self.device)
+		cam  =  F.relu((weights * target).mean(dim = 1), inplace=True).cpu().data.numpy()
+		if resize is not None:
+			cam = cv2.resize(cam, resize)
+		cam = cam - np.min(cam,axis=(1,2),keepdims=True)
+		cam = cam / np.max(cam,axis=(1,2),keepdims=True)
 		return cam
 
 class GuidedBackpropReLU(Function):
@@ -171,65 +185,13 @@ class GuidedBackpropReLUModel:
 		else:
 			one_hot = torch.sum(one_hot * output)
 
-		# self.model.features.zero_grad()
-		# self.model.classifier.zero_grad()
-		one_hot.backward(retain_variables=True)
+		self.model.features.zero_grad()
+		self.model.classifier.zero_grad()
+		one_hot.backward(retain_graph=True)
 
 		output = input.grad.cpu().data.numpy()
-		output = output[0,:,:,:]
+		#output = output[0,:,:,:]
 
 		return output
 
-def get_args():
-	parser = argparse.ArgumentParser()
-	parser.add_argument('--use-cuda', action='store_true', default=False,
-	                    help='Use NVIDIA GPU acceleration')
-	parser.add_argument('--image-path', type=str, default='./examples/both.png',
-	                    help='Input image path')
-	args = parser.parse_args()
-	args.use_cuda = args.use_cuda and torch.cuda.is_available()
-	if args.use_cuda:
-	    print("Using GPU for acceleration")
-	else:
-	    print("Using CPU for computation")
 
-	return args
-
-if __name__ == '__main__':
-	""" python grad_cam.py <path_to_image>
-	1. Loads an image with opencv.
-	2. Preprocesses it for VGG19 and converts to a pytorch variable.
-	3. Makes a forward pass to find the category index with the highest score,
-	and computes intermediate activations.
-	Makes the visualization. """
-
-	args = get_args()
-
-	# Can work with any model, but it assumes that the model has a 
-	# feature method, and a classifier method,
-	# as in the VGG models in torchvision.
-	grad_cam = GradCam(model = models.vgg19(pretrained=True), \
-					target_layer_names = ["35"], use_cuda=args.use_cuda)
-
-	img = cv2.imread(args.image_path, 1)
-	img = np.float32(cv2.resize(img, (224, 224))) / 255
-	input = preprocess_image(img)
-
-	# If None, returns the map for the highest scoring category.
-	# Otherwise, targets the requested index.
-	target_index = None
-
-	mask = grad_cam(input, target_index)
-
-	show_cam_on_image(img, mask)
-
-	gb_model = GuidedBackpropReLUModel(model = models.vgg19(pretrained=True), use_cuda=args.use_cuda)
-	gb = gb_model(input, index=target_index)
-	utils.save_image(torch.from_numpy(gb), 'gb.jpg')
-
-	cam_mask = np.zeros(gb.shape)
-	for i in range(0, gb.shape[0]):
-	    cam_mask[i, :, :] = mask
-
-	cam_gb = np.multiply(cam_mask, gb)
-	utils.save_image(torch.from_numpy(cam_gb), 'cam_gb.jpg')
