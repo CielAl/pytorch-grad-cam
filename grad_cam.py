@@ -81,6 +81,14 @@ def show_cam_on_image(img, mask):
 	out = np.uint8(255 * cam)
 	cv2.imwrite("cam.jpg", out)
 	return out
+
+	'''
+		grad (32, 128, 8, 8)
+		weight (32 128,)
+		target (32 128, 8, 8)
+		cam (32 8, 8)		
+	'''
+		
 class GradCam:
 	def __init__(self, model, target_layer_names, cuda_id):
 		self.model = model
@@ -111,22 +119,9 @@ class GradCam:
 		grads_val = self.extractor.get_gradients()[-1].cpu().data.numpy()
 	
 		target = features[-1]
-		
-		target = target.cpu().data.numpy()#[0, :]
-	
-		weights = np.mean(grads_val, axis = (2, 3),keepdims = True)#[0, :]
-
-		
-
-		'''
-			grad (32, 128, 8, 8)
-			weight (32 128,)
-			target (32 128, 8, 8)
-			cam (32 8, 8)		
-		'''
-		
+		weights = grads_val.mean(axis = [2, 3],keepdims = True)#[0, :]
 		weights = torch.from_numpy(weights).to(self.device)
-		target = torch.from_numpy(target).to(self.device)
+		
 		cam  =  F.relu((weights * target).mean(dim = 1), inplace=True).cpu().data.numpy()
 		if resize is not None:
 			cam = cv2.resize(cam, resize)
