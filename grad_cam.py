@@ -122,10 +122,13 @@ class GradCam:
 		weights = grads_val.mean(axis = (2, 3),keepdims = True)#[0, :]
 		weights = torch.from_numpy(weights).to(self.device)
 		cam  =  F.relu((weights * target).mean(dim = 1), inplace=True).cpu().data.numpy()
-		if resize is not None:
-			cam = cv2.resize(cam, resize)
+		
 		cam = cam - np.min(cam,axis=(1,2),keepdims=True)
 		cam = cam / np.max(cam,axis=(1,2),keepdims=True)
+		if resize is not None:
+			cam = np.moveaxis(cam,0,-1)  #cv2.resize only support batches if with dimension H*W*Batch
+			cam = cv2.resize(cam, resize)
+			cam = np.moveaxis(cam,-1,0)
 		return cam
 
 class GuidedBackpropReLU(Function):
