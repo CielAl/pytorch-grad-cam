@@ -119,9 +119,8 @@ class GradCam:
 		grads_val = self.extractor.get_gradients()[-1].cpu().data.numpy()
 	
 		target = features[-1]
-		weights = grads_val.mean(axis = [2, 3],keepdims = True)#[0, :]
+		weights = grads_val.mean(axis = (2, 3),keepdims = True)#[0, :]
 		weights = torch.from_numpy(weights).to(self.device)
-		
 		cam  =  F.relu((weights * target).mean(dim = 1), inplace=True).cpu().data.numpy()
 		if resize is not None:
 			cam = cv2.resize(cam, resize)
