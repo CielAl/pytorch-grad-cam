@@ -1,4 +1,4 @@
-## Grad-CAM implementation in Pytorch ##
+## Grad-CAM implementation in Pytorch [Fork]##
 
 ### What makes the network think the image label is 'pug, pug-dog' and 'tabby, tabby cat':
 ![Dog](https://github.com/jacobgil/pytorch-grad-cam/blob/master/examples/dog.jpg?raw=true) ![Cat](https://github.com/jacobgil/pytorch-grad-cam/blob/master/examples/cat.jpg?raw=true)
@@ -14,7 +14,7 @@ My Keras implementation: https://github.com/jacobgil/keras-grad-cam
 
 ----------
 
-
+* Fork from https://github.com/jacobgil/pytorch-grad-cam/blob/master/grad-cam.py
 This uses VGG19 from torchvision. It will be downloaded when used for the first time.
 
 The code can be modified to work with any model.
