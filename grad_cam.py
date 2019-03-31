@@ -58,6 +58,14 @@ class ModelOutputs():
 		output = self.model.classifier(output)
 		return target_activations, output
 
+'''
+	def _default_output(self,target_activations, output):
+		output = F.relu(output, inplace=True)
+		output = F.adaptive_avg_pool2d(output, (1, 1)).view(output.size(0), -1)
+		output = self.model.classifier(output)
+		return target_activations,output
+'''
+	
 def preprocess_image(img):
 	means=[0.485, 0.456, 0.406]
 	stds=[0.229, 0.224, 0.225]
@@ -73,13 +81,14 @@ def preprocess_image(img):
 	input = Variable(preprocessed_img, requires_grad = True)
 	return input
 
-def show_cam_on_image(img, mask):
+def show_cam_on_image(img, mask,name = None):
 	heatmap = cv2.applyColorMap(np.uint8(255*mask), cv2.COLORMAP_JET)
 	heatmap = np.float32(heatmap) / 255
 	cam = heatmap + np.float32(img)
 	cam = cam / np.max(cam)
 	out = np.uint8(255 * cam)
-	cv2.imwrite("cam.jpg", out)
+	if name is not None:
+		cv2.imwrite(name, out)
 	return out
 
 	'''
@@ -123,12 +132,18 @@ class GradCam:
 		weights = torch.from_numpy(weights).to(self.device)
 		cam  =  F.relu((weights * target).mean(dim = 1), inplace=True).cpu().data.numpy()
 		
-		cam = cam - np.min(cam,axis=(1,2),keepdims=True)
-		cam = cam / np.max(cam,axis=(1,2),keepdims=True)
+		min_val = np.min(cam,axis=(1,2),keepdims=True)
+		max_val = np.max(cam,axis=(1,2),keepdims=True)
+		diff = max_val-min_val
+		diff[diff==0] = np.inf
+		cam = (cam - min_val)/diff
+		#cam = cam / (np.max(cam,axis=(1,2),keepdims=True)
+		cam[np.isnan(cam)] = 0
 		if resize is not None:
 			cam = np.moveaxis(cam,0,-1)  #cv2.resize only support batches if with dimension H*W*Batch
 			cam = cv2.resize(cam, resize)
 			cam = np.moveaxis(cam,-1,0)
+		cam = np.uint8(255*cam)
 		return cam
 
 class GuidedBackpropReLU(Function):
