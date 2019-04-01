@@ -82,13 +82,15 @@ def preprocess_image(img):
 	return input
 
 def show_cam_on_image(img, mask,name = None):
+	if img.dtype==np.uint8:
+		img = img/255.
 	heatmap = cv2.applyColorMap(np.uint8(255*mask), cv2.COLORMAP_JET)
 	heatmap = np.float32(heatmap) / 255
 	cam = heatmap + np.float32(img)
 	cam = cam / np.max(cam)
 	out = np.uint8(255 * cam)
 	if name is not None:
-		cv2.imwrite(name, out)
+		cv2.imwrite(name, cv2.cvtColor(out,cv2.COLOR_BGR2RGB))
 	return out
 
 	'''
@@ -143,7 +145,7 @@ class GradCam:
 			cam = np.moveaxis(cam,0,-1)  #cv2.resize only support batches if with dimension H*W*Batch
 			cam = cv2.resize(cam, resize)
 			cam = np.moveaxis(cam,-1,0)
-		cam = np.uint8(255*cam)
+		#cam = np.uint8(255*cam)
 		return cam
 
 class GuidedBackpropReLU(Function):
