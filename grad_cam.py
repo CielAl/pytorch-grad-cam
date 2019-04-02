@@ -81,14 +81,34 @@ def preprocess_image(img):
 	input = Variable(preprocessed_img, requires_grad = True)
 	return input
 
-def show_cam_on_image(img, mask,name = None):
+def show_cam_on_image(img, mask,name = None,binary_mask = None):
 	if img.dtype==np.uint8:
 		img = img/255.
-	heatmap = cv2.applyColorMap(np.uint8(255*mask), cv2.COLORMAP_JET)
-	heatmap = np.float32(heatmap) / 255
-	cam = heatmap + np.float32(img)
-	cam = cam / np.max(cam)
-	out = np.uint8(255 * cam)
+	mask*=255
+	heatmap = cv2.applyColorMap(np.uint8(mask), cv2.COLORMAP_JET)
+	del mask
+	heatmap = heatmap/255.
+	
+	
+	if binary_mask is None:
+		cam = heatmap + np.float32(img)
+		cam = cam / np.max(cam)
+	else:
+		#only normalize the masked area
+		#only normalize the masked area
+		heatmap[binary_mask==0,] = 0
+		cam = (heatmap + np.float32(img)).astype(np.float32)
+		
+		del heatmap
+		target_area = binary_mask>0
+		max_val = np.max(cam[target_area,])
+		cam[target_area,]/max_val
+	del img
+	del mask
+	del max_val
+	del target_area
+	cam*=255
+	out = np.uint8(cam)
 	if name is not None:
 		cv2.imwrite(name, cv2.cvtColor(out,cv2.COLOR_BGR2RGB))
 	return out

@@ -10,6 +10,7 @@ class RoiPlot(object):
 		self.target_layer_names = kwargs.get('target_layer_names',["denseblock4"])
 		self.cuda_id = kwargs.get('cuda_id',0)
 		self.resize_shape = kwargs.get('resize_shape')
+		self.model = model
 		self.gc = GradCam(model = model,target_layer_names = self.target_layer_names, cuda_id = self.cuda_id)
 
 	# Batch,Channel, H ,W
@@ -20,8 +21,11 @@ class RoiPlot(object):
 	
 	
 	
-	def extract(self,roi_batch_iterator_fix_len,dimensions,target_indices):
+	def extract(self,roi_batch_iterator_fix_len,dimensions,target_indices,n_classes = 2):
+		self.model.eval()
 		enum = enumerate(roi_batch_iterator_fix_len)
+		#softmax=(nn.Softmax(dim=1))
+		
 		if len(dimensions) ==3:
 			dimensions = dimensions+(1,)
 		elif len(dimensions)<=2 or len(dimensions)>=5:
@@ -30,8 +34,8 @@ class RoiPlot(object):
 		
 		output_shape = (width,height)
 		#channel = 1, for heatmaps -->omitted
-		map_store = [np.ndarray((num_patch,)+output_shape) for x in target_indices]
-		
+		map_store = [np.zeros((num_patch,)+output_shape) for x in target_indices]
+		pred_store = np.zeros((num_patch,))
 	
 		# in case the batch is not homogeneous in size.
 		arr_top = 0;
@@ -39,42 +43,24 @@ class RoiPlot(object):
 		#use *rest may unpack the torch itself.
 		for batch_id,img in enum:
 			output_map = [self.gc(img,index,resize=output_shape) for index in target_indices]
+			pred_map = self.model(img.to(self.gc.device))
+			output_fetch = pred_map.detach().squeeze().cpu().numpy()
+			if len(output_fetch.shape)==1:
+				output_fetch = np.expand_dims(output_fetch,axis=0)
+			prediction = np.argmax(output_fetch,axis = 1).flatten()
 			#output_map is non-empty
 			batch_size = output_map[0].shape[0]
 			for jj, index_val in enumerate(target_indices):
 				#print(jj,output_map[jj].shape,batch_size,img.shape[0],'|',arr_top,map_store[jj].shape)		
 				map_store[jj][arr_top: arr_top+ batch_size,] = output_map[jj]
+			#print(prediction.shape,pred_store.shape)
+			pred_store[arr_top: arr_top+ batch_size,] = prediction
 			arr_top += batch_size
-		return map_store
+		return map_store,pred_store
 	
-	'''
-	def extract_compare(self,roi_batch_iterator_fix_len,dimensions,target_indice):
-		enum = enumerate(roi_batch_iterator_fix_len)
-		if len(dimensions) ==3:
-			dimensions = dimensions+(1,)
-		elif len(dimensions)<=2 or len(dimensions)>=5:
-			raise ValueError('dimensions is supposed to be a 3 or 4-sized tuple')
-		num_patch,height,width,channel = dimensions
-		
-		output_shape = (width,height)
-		#channel = 1, for heatmaps -->omitted
-		map_store = np.ndarray((num_patch,)+output_shape)
-		
-	
-		# in case the batch is not homogeneous in size.
-		arr_top = 0;
-		
-		#use *rest may unpack the torch itself.
-		for batch_id,img in enum:
-			output_map = self.gc(img,target_indice,resize=output_shape) 
-			#output_map is non-empty
-			batch_size = output_map.shape[0]
-			#for jj, index_val in enumerate(target_indices):
-			#print(jj,output_map[jj].shape,batch_size,img.shape[0],'|',arr_top,map_store[jj].shape)		
-			map_store[arr_top: arr_top+ batch_size,] = output_map
-			arr_top += batch_size
-		return map_store
-	'''		
+	@staticmethod
+	def sanitize_by_mask(self):
+		...
 
 	def map_shape(self,patches = None):
 		return self.resize_shape if (self.resize_shape is not None) else patches.shape[2:]
