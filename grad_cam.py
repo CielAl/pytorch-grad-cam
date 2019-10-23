@@ -1,20 +1,20 @@
 # add batch
-import argparse
-import sys
+"""
+Modified to take batch input.
 
+Original Author: Jacob Gildenblat; github: https://github.com/jacobgil
+"""
 import cv2
-import gc
 import numpy as np
 import torch
-import torch.nn as nn
+# noinspection PyPep8Naming
 import torch.nn.functional as F
 from torch.autograd import Function
-from torch.autograd import Variable
-from torchvision import models
-from torchvision import utils
+from matplotlib.colors import Colormap
+from matplotlib import cm
 
 
-class FeatureExtractor():
+class FeatureExtractor(object):
     """ Class for extracting activations and 
     registering gradients from targetted intermediate layers """
 
@@ -39,7 +39,7 @@ class FeatureExtractor():
         return features, output
 
 
-class ModelOutputs():
+class ModelOutputs(object):
     """ Class for making a forward pass, and getting:
     1. The network output.
     2. Activations from intermeddiate targetted layers.
@@ -63,15 +63,6 @@ class ModelOutputs():
         return target_activations, output
 
 
-'''
-	def _default_output(self,target_activations, output):
-		output = F.relu(output, inplace=True)
-		output = F.adaptive_avg_pool2d(output, (1, 1)).view(output.size(0), -1)
-		output = self.model.classifier(output)
-		return target_activations,output
-'''
-
-
 def preprocess_image(img):
     means = [0.485, 0.456, 0.406]
     stds = [0.229, 0.224, 0.225]
@@ -84,49 +75,49 @@ def preprocess_image(img):
         np.ascontiguousarray(np.transpose(preprocessed_img, (2, 0, 1)))
     preprocessed_img = torch.from_numpy(preprocessed_img)
     preprocessed_img.unsqueeze_(0)
-    input = Variable(preprocessed_img, requires_grad=True)
+    input = preprocessed_img.requires_grad_(True)
     return input
 
 
-def show_cam_on_image(img, mask, name=None, binary_mask=None):
+def show_cam_on_image(img: np.ndarray,
+                      mask: np.ndarray,
+                      color_map: Colormap = cm.coolwarm,
+                      name: str = None):
+    """
+    Reshape Overlay the GradCam output (mask) to the input img given color map.
+    Args:
+        img (): Expected to be within [0, 1]. Automatically normalized if dtype is uint8
+        mask (): Output of the GradCam.
+        color_map (): Matplotlib colormap
+        name (): Name of the output img. Default is None, which disables the imwrite.
+
+    Returns:
+
+    """
     if img.dtype == np.uint8:
         img = img / 255.
-    mask *= 255
+
     # BGR order
-    heatmap = cv2.applyColorMap(np.uint8(mask), cv2.COLORMAP_JET)
-    mask = None
-    gc.collect()
+    heatmap = color_map(mask)[:, :, 0:3]
+    heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+    print('hm_max', heatmap.max())
     # norm to [0,1]
-    heatmap = heatmap / 255.
 
-    if binary_mask is None:
-        cam = heatmap + np.float32(img)
-        cam = cam / np.max(cam)
-    else:
-        heatmap[binary_mask == 0,] = 0
-        cam = (heatmap + np.float32(img)).astype(np.float32)
+    cam = heatmap + np.float32(img)
 
-        del heatmap
-        target_area = binary_mask > 0
-        max_val = np.max(cam[target_area,])
-        cam[target_area,] /= max_val
-    del img
-    del mask
-    del max_val
-    del target_area
+    cam = cam / np.max(cam)
+
     cam *= 255
     out = np.uint8(cam)
     if name is not None:
         # applyColorMap returns a BGR out. So it is not necessary to convert the channel order while writing.
-        cv2.imwrite(name, out)
-    return cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
+        cv2.imwrite(name, cv2.cvtColor(out, cv2.COLOR_BGR2RGB))
+    return out, heatmap
 
-    '''
-        grad (32, 128, 8, 8)
-        weight (32 128,)
-        target (32 128, 8, 8)
-        cam (32 8, 8)		
-    '''
+    #   grad (32, 128, 8, 8)
+    #   weight (32 128,)
+    #   target (32 128, 8, 8)
+    #    cam (32 8, 8)
 
 
 class GradCam:
@@ -137,18 +128,18 @@ class GradCam:
         self.model = model.to(self.device)
         self.extractor = ModelOutputs(self.model, target_layer_names)
 
-    def forward(self, input):
-        return self.model(input)
+    def forward(self, input_data):
+        return self.model(input_data)
 
-    def __call__(self, input, index=None, resize=None):
-        features, output = self.extractor(input.to(self.device))
+    def __call__(self, input_data: torch.Tensor, index=None, resize=None):
+        features, output = self.extractor(input_data.to(self.device))
 
-        if index == None:
+        if index is None:
             index = np.argmax(output.cpu().data.numpy())
 
         one_hot = np.zeros((output.shape[0], output.size()[-1]), dtype=np.float32)
         one_hot[:, index] = 1
-        one_hot = Variable(torch.from_numpy(one_hot), requires_grad=True)
+        one_hot = torch.from_numpy(one_hot).requires_grad_(True)
         one_hot = torch.sum(one_hot.to(self.device) * output)
 
         self.model.features.zero_grad()
@@ -179,20 +170,19 @@ class GradCam:
 
 class GuidedBackpropReLU(Function):
 
-    def forward(self, input):
-        positive_mask = (input > 0).type_as(input)
-        output = torch.addcmul(torch.zeros(input.size()).type_as(input), input, positive_mask)
-        self.save_for_backward(input, output)
+    def forward(self, input_data, **kwargs):
+        positive_mask = (input_data > 0).type_as(input_data)
+        output = torch.addcmul(torch.zeros(input_data.size()).type_as(input_data), input_data, positive_mask)
+        # noinspection PyUnresolvedReferences
+        self.save_for_backward(input_data, output)
         return output
 
     def backward(self, grad_output):
-        input, output = self.saved_tensors
-        grad_input = None
-
-        positive_mask_1 = (input > 0).type_as(grad_output)
+        input_data, output = self.saved_tensors
+        positive_mask_1 = (input_data > 0).type_as(grad_output)
         positive_mask_2 = (grad_output > 0).type_as(grad_output)
-        grad_input = torch.addcmul(torch.zeros(input.size()).type_as(input),
-                                   torch.addcmul(torch.zeros(input.size()).type_as(input), grad_output,
+        grad_input = torch.addcmul(torch.zeros(input_data.size()).type_as(input_data),
+                                   torch.addcmul(torch.zeros(input_data.size()).type_as(input_data), grad_output,
                                                  positive_mask_1), positive_mask_2)
 
         return grad_input
@@ -211,21 +201,21 @@ class GuidedBackpropReLUModel:
             if module.__class__.__name__ == 'ReLU':
                 self.model.features._modules[idx] = GuidedBackpropReLU()
 
-    def forward(self, input):
-        return self.model(input)
+    def forward(self, x):
+        return self.model(x)
 
-    def __call__(self, input, index=None):
+    def __call__(self, input_data, index=None):
         if self.cuda:
-            output = self.forward(input.cuda())
+            output = self.forward(input_data.cuda())
         else:
-            output = self.forward(input)
+            output = self.forward(input_data)
 
-        if index == None:
+        if index is None:
             index = np.argmax(output.cpu().data.numpy())
 
         one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
         one_hot[0][index] = 1
-        one_hot = Variable(torch.from_numpy(one_hot), requires_grad=True)
+        one_hot = torch.from_numpy(one_hot).requires_grad_(True)
         if self.cuda:
             one_hot = torch.sum(one_hot.cuda() * output)
         else:
@@ -235,7 +225,7 @@ class GuidedBackpropReLUModel:
         self.model.classifier.zero_grad()
         one_hot.backward(retain_graph=True)
 
-        output = input.grad.cpu().data.numpy()
+        output = input_data.grad.cpu().data.numpy()
         # output = output[0,:,:,:]
 
         return output
